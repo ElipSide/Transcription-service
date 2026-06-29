@@ -6,6 +6,10 @@ export interface TokenPair {
   token_type: string;
 }
 
+// Base path the app is served under ("" at root, "/transcribe" behind a prefix).
+// Derived from Vite's BASE_URL so a single build arg controls everything.
+const ROOT = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 const ACCESS_KEY = "ts_access";
 const REFRESH_KEY = "ts_refresh";
 
@@ -48,7 +52,7 @@ async function parseError(res: Response): Promise<string> {
 async function refreshAccess(): Promise<boolean> {
   const r = tokens.refresh;
   if (!r) return false;
-  const res = await fetch("/api/auth/refresh", {
+  const res = await fetch(`${ROOT}/api/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh_token: r }),
@@ -71,7 +75,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   if (tokens.access) headers["Authorization"] = `Bearer ${tokens.access}`;
   if (!isForm && body !== undefined) headers["Content-Type"] = "application/json";
 
-  const res = await fetch(path, {
+  const res = await fetch(`${ROOT}${path}`, {
     method,
     headers,
     body: isForm ? body : body !== undefined ? JSON.stringify(body) : undefined,
@@ -143,7 +147,7 @@ export async function uploadFile(
 
 // ---------- Authenticated file download ----------
 export async function downloadPdf(jobId: string, kind: "transcript" | "report") {
-  const res = await fetch(`/api/jobs/${jobId}/download/${kind}`, {
+  const res = await fetch(`${ROOT}/api/jobs/${jobId}/download/${kind}`, {
     headers: tokens.access ? { Authorization: `Bearer ${tokens.access}` } : {},
   });
   if (!res.ok) throw new ApiError(res.status, await parseError(res));
@@ -161,7 +165,7 @@ export async function downloadPdf(jobId: string, kind: "transcript" | "report") 
 // ---------- Live progress WebSocket ----------
 export function openJobSocket(jobId: string, onMessage: (data: any) => void): WebSocket {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const url = `${proto}://${location.host}/api/jobs/${jobId}/ws?token=${tokens.access}`;
+  const url = `${proto}://${location.host}${ROOT}/api/jobs/${jobId}/ws?token=${tokens.access}`;
   const ws = new WebSocket(url);
   ws.onmessage = (e) => {
     try {
