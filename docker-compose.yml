@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-transcribe}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-transcribe}
+      POSTGRES_DB: ${POSTGRES_DB:-transcribe}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-transcribe}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-transcribe}:${POSTGRES_PASSWORD:-transcribe}@db:5432/${POSTGRES_DB:-transcribe}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required - set it in .env}
+      DIAR_BASE_URL: ${DIAR_BASE_URL:-https://109.202.9.107:8443/diaraudio}
+      DIAR_WS_URL: ${DIAR_WS_URL:-wss://109.202.9.107:8443/diaraudio}
+      DIAR_VERIFY_SSL: ${DIAR_VERIFY_SSL:-false}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-2147483648}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  storage:
