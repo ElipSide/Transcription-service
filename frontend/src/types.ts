@@ -2,6 +2,7 @@ export type JobMode = "transcription" | "report" | "ai_extract";
 export type JobStatus =
   | "uploading"
   | "queued"
+  | "waiting"
   | "processing"
   | "completed"
   | "failed";
@@ -39,6 +40,7 @@ export interface JobDetail extends JobListItem {
   result_text: string | null;
   result_segments: Segment[] | null;
   report_html: string | null;
+  diarization_note: string | null;
   has_report_pdf: boolean;
   has_transcript_pdf: boolean;
 }
@@ -52,6 +54,7 @@ export const MODE_LABELS: Record<JobMode, string> = {
 export const STATUS_LABELS: Record<JobStatus, string> = {
   uploading: "Загрузка",
   queued: "В очереди",
+  waiting: "Ожидает сервис",
   processing: "Обработка",
   completed: "Готово",
   failed: "Ошибка",

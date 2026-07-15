@@ -106,6 +106,8 @@ export const api = {
   listJobs: () => request<JobListItem[]>("/api/jobs"),
   getJob: (id: string) => request<JobDetail>(`/api/jobs/${id}`),
   deleteJob: (id: string) => request<void>(`/api/jobs/${id}`, { method: "DELETE" }),
+
+  diarStatus: () => request<{ available: boolean }>("/api/diar/status"),
 };
 
 // ---------- Chunked upload ----------

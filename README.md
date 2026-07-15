@@ -38,14 +38,16 @@ python -c "import secrets; print(secrets.token_urlsafe(48))"
 
 docker compose up -d --build
 ```
-Приложение: **http://localhost:8080** (порт меняется через `WEB_PORT` в `.env`).
+Приложение: **http://localhost:8095/transcribe/**
+(порт меняется через `WEB_PORT`, а публичный под-путь — через `WEB_BASE` в `.env`;
+для отдачи с корня укажите `WEB_BASE=/`).
 
 Контейнеры:
 | Сервис | Образ / сборка | Назначение |
 |---|---|---|
 | `db` | postgres:16-alpine | БД (том `db-data`) |
 | `backend` | `./backend` (python:3.12-slim + ffmpeg + WeasyPrint) | FastAPI на :8000 (внутри сети) |
-| `frontend` | `./frontend` (сборка React → nginx) | раздаёт SPA и проксирует `/api` (+WebSocket) на backend |
+| `frontend` | `./frontend` (сборка React → nginx) | раздаёт SPA под `/transcribe/` и проксирует `/transcribe/api/` (+WebSocket) на backend :8000 |
 
 Загруженные файлы и результаты хранятся в томе `storage`. Логи: `docker compose logs -f backend`.
 Остановить: `docker compose down` (данные сохраняются; `down -v` — удалить и тома).
@@ -116,7 +118,8 @@ npm run build        # результат в frontend/dist — раздать л
 1. PostgreSQL + `ffmpeg` на сервере.
 2. Бэкенд под systemd: `uvicorn app.main:app --host 127.0.0.1 --port 8000`
    (несколько воркеров требуют замены in-process pub/sub на Redis — см. `services/progress_hub.py`).
-3. `npm run build`, раздать `frontend/dist` через nginx; проксировать `/api` (вкл. WebSocket) на бэкенд.
+3. `npm run build` (при отдаче с под-пути укажите `VITE_BASE`, напр. `/transcribe/`),
+   раздать `frontend/dist` через nginx; проксировать `/transcribe/api/` (вкл. WebSocket) на бэкенд.
 4. DiarService должен быть доступен по адресам из `.env`.
 
 ## Структура

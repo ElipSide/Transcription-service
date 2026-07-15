@@ -66,6 +66,7 @@ class JobDetail(JobListItem):
     result_text: str | None
     result_segments: list[Segment] | None
     report_html: str | None
+    diarization_note: str | None = None
     has_report_pdf: bool = False
     has_transcript_pdf: bool = False
 

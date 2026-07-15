@@ -9,12 +9,13 @@ function fmtDate(s: string) {
   return new Date(s).toLocaleString("ru-RU");
 }
 
-const ACTIVE = new Set(["queued", "processing"]);
+const ACTIVE = new Set(["queued", "waiting", "processing"]);
 const STATUS_ICON: Record<string, string> = {
   completed: "✅",
   failed: "⚠️",
   processing: "⏳",
   queued: "🕘",
+  waiting: "⏸️",
   uploading: "⬆️",
 };
 

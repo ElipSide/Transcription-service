@@ -24,6 +24,7 @@ def _now() -> datetime:
 class JobStatus(str, enum.Enum):
     uploading = "uploading"      # chunks being received
     queued = "queued"           # accepted, waiting for processing
+    waiting = "waiting"         # DiarService unavailable -> auto-retried later
     processing = "processing"   # being recognized/diarized
     completed = "completed"
     failed = "failed"
@@ -82,6 +83,10 @@ class Job(Base):
 
     # external task reference
     diar_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # non-fatal diarization warning surfaced from DiarService (e.g. MSDD failed
+    # -> everything collapsed to one speaker). Transcript is still valid.
+    diarization_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # results
     result_text: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -37,3 +38,8 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Lightweight, idempotent migrations for columns added after a table
+        # already exists (create_all won't alter existing tables).
+        await conn.execute(
+            text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS diarization_note TEXT")
+        )

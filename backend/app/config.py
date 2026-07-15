@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     diar_ws_url: str = "wss://109.202.9.107:8443/diaraudio"
     diar_upload_timeout: int = 360
     diar_verify_ssl: bool = False  # self-signed cert -> skip verification
+    # How often the reconciler pings DiarService and flushes the waiting queue.
+    diar_health_interval: int = 15
+    diar_health_timeout: float = 6.0
 
     # DeepSeek
     deepseek_api_key: str = ""

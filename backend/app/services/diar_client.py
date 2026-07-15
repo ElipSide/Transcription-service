@@ -34,6 +34,42 @@ class DiarUploadError(Exception):
     """Raised when DiarService rejects an upload with a meaningful HTTP error."""
 
 
+# ---- Availability tracking ---------------------------------------------------
+# Cached so the browser-facing status endpoint doesn't hit DiarService on every
+# poll; the reconciler loop refreshes it on a fixed interval.
+_available: bool = True
+
+
+async def health(timeout: float | None = None) -> bool:
+    """True if DiarService answers at all (any non-5xx HTTP response).
+
+    A connection refusal / timeout (service down or unreachable) -> False.
+    """
+    url = settings.diar_base_url
+    to = timeout if timeout is not None else settings.diar_health_timeout
+    try:
+        async with httpx.AsyncClient(timeout=to, verify=settings.diar_verify_ssl) as client:
+            resp = await client.get(url)
+        return resp.status_code < 500
+    except Exception:  # noqa: BLE001 — any transport error means "down"
+        return False
+
+
+async def refresh_health() -> bool:
+    """Ping DiarService and update the cached availability flag."""
+    global _available
+    ok = await health()
+    if ok != _available:
+        logger.info("DiarService availability changed: %s -> %s", _available, ok)
+    _available = ok
+    return ok
+
+
+def is_available() -> bool:
+    """Last known availability (updated by the reconciler loop)."""
+    return _available
+
+
 @dataclass
 class DiarUpdate:
     status: str = "processing"
@@ -42,6 +78,7 @@ class DiarUpdate:
     result_text: str | None = None
     result_segments: list | None = None
     error: str | None = None
+    diarization_error: str | None = None
     raw: dict = field(default_factory=dict)
 
 
@@ -95,6 +132,7 @@ async def stream_status(task_id: str, max_retries: int = 10):
                         result_text=data.get("result_text"),
                         result_segments=data.get("result_segments"),
                         error=data.get("error"),
+                        diarization_error=data.get("diarization_error"),
                         raw=data,
                     )
                     yield update
