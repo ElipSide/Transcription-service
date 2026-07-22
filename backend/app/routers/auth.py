@@ -1,3 +1,4 @@
+import secrets
 import uuid
 
 import jwt
@@ -48,6 +49,27 @@ async def register(payload: UserRegister, db: AsyncSession = Depends(get_db)) ->
         email=email,
         full_name=payload.full_name,
         hashed_password=hash_password(payload.password),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return _tokens_for(user)
+
+
+@router.post("/guest", response_model=TokenPair, status_code=status.HTTP_201_CREATED)
+async def guest(db: AsyncSession = Depends(get_db)) -> TokenPair:
+    """Start an anonymous session — no registration needed.
+
+    The guest owns its jobs like any user, so every existing permission check
+    keeps working. Password is random and unusable: nobody can log in as a
+    guest, the session lives only through its tokens. Guests and their results
+    are purged by the cleanup janitor.
+    """
+    user = User(
+        email=f"guest-{uuid.uuid4()}@guest.local",
+        full_name="Гость",
+        hashed_password=hash_password(secrets.token_urlsafe(32)),
+        is_guest=True,
     )
     db.add(user)
     await db.commit()

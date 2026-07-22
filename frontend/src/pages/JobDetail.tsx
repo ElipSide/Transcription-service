@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { api, downloadPdf, openJobSocket } from "../api";
-import type { JobDetail, Segment } from "../types";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { api, downloadPdf, openJobSocket, resultFileName } from "../api";
+import type { JobDetail, JobMode, Segment } from "../types";
 import { MODE_LABELS, STATUS_LABELS } from "../types";
 import { Markdown } from "../markdown";
 import { groupSegments, initials, type SpeakerColor } from "../speakers";
@@ -115,7 +115,9 @@ export default function JobDetailPage() {
             {job.has_report_pdf && (
               <button
                 className="btn primary btn-lg"
-                onClick={() => downloadPdf(job.id, "report")}
+                onClick={() =>
+                  downloadPdf(job.id, "report", resultFileName(job, "report"))
+                }
               >
                 📄 {job.mode === "ai_extract" ? "AI-выжимка" : "Отчёт"} (PDF)
               </button>
@@ -123,7 +125,9 @@ export default function JobDetailPage() {
             {job.has_transcript_pdf && (
               <button
                 className={`btn btn-lg ${job.has_report_pdf ? "" : "primary"}`}
-                onClick={() => downloadPdf(job.id, "transcript")}
+                onClick={() =>
+                  downloadPdf(job.id, "transcript", resultFileName(job, "transcript"))
+                }
               >
                 📝 Транскрипция (PDF)
               </button>
@@ -131,6 +135,8 @@ export default function JobDetailPage() {
           </div>
         </div>
       )}
+
+      {job.status === "completed" && job.result_text && <RerunCard job={job} />}
 
       {job.status === "completed" && job.mode !== "transcription" && job.report_html && (
         <ReportCard mode={job.mode} html={job.report_html} />
@@ -143,6 +149,63 @@ export default function JobDetailPage() {
           note={job.diarization_note}
         />
       )}
+    </div>
+  );
+}
+
+/* ---------- Re-run in another mode ---------- */
+
+const MODE_ICON: Record<JobMode, string> = {
+  transcription: "📝",
+  report: "📄",
+  ai_extract: "✨",
+};
+
+function RerunCard({ job }: { job: JobDetail }) {
+  const [busy, setBusy] = useState<JobMode | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const nav = useNavigate();
+
+  const others = (Object.keys(MODE_LABELS) as JobMode[]).filter(
+    (m) => m !== job.mode
+  );
+
+  const run = useCallback(
+    async (mode: JobMode) => {
+      setBusy(mode);
+      setError(null);
+      try {
+        const { job_id } = await api.rerunJob(job.id, mode);
+        nav(`/jobs/${job_id}`);
+      } catch (e: any) {
+        setError(e.message ?? "Не удалось запустить обработку");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [job.id, nav]
+  );
+
+  return (
+    <div className="card">
+      <h2>Обработать в другом режиме</h2>
+      <div className="muted small rerun-hint">
+        Файл уже распознан — транскрипция переиспользуется, распознавание заново
+        не запускается. Результат появится как новая задача.
+      </div>
+      {error && <div className="error">{error}</div>}
+      <div className="downloads">
+        {others.map((m) => (
+          <button
+            key={m}
+            className="btn btn-lg"
+            disabled={busy !== null}
+            onClick={() => run(m)}
+          >
+            {busy === m ? "Запуск…" : `${MODE_ICON[m]} ${MODE_LABELS[m]}`}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

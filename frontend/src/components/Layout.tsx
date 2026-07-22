@@ -33,8 +33,19 @@ function DiarStatusBanner() {
   );
 }
 
+function GuestBanner() {
+  return (
+    <div className="guest-banner">
+      👋 Вы работаете без входа — результаты доступны только в этой вкладке и
+      пропадут после её закрытия.{" "}
+      <Link to="/login">Войти</Link> или <Link to="/register">зарегистрироваться</Link>,
+      чтобы сохранить историю.
+    </div>
+  );
+}
+
 export default function Layout() {
-  const { user, logout } = useAuth();
+  const { user, isGuest, logout } = useAuth();
   return (
     <div className="app">
       <header className="topbar">
@@ -42,13 +53,25 @@ export default function Layout() {
           🎙 Транскрипция
         </Link>
         <div className="topbar-right">
-          <span className="muted">{user?.email}</span>
-          <button className="btn ghost" onClick={logout}>
-            Выйти
-          </button>
+          {isGuest ? (
+            <>
+              <span className="muted small">Гостевой режим</span>
+              <Link to="/login" className="btn">
+                Войти в ЛК
+              </Link>
+            </>
+          ) : (
+            <>
+              <span className="muted">{user?.email}</span>
+              <button className="btn ghost" onClick={logout}>
+                Выйти
+              </button>
+            </>
+          )}
         </div>
       </header>
       <DiarStatusBanner />
+      {isGuest && <GuestBanner />}
       <main className="container">
         <Outlet />
       </main>

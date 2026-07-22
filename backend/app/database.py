@@ -43,3 +43,15 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS diarization_note TEXT")
         )
+        await conn.execute(
+            text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS batch_id UUID")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_jobs_batch_id ON jobs (batch_id)")
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                "is_guest BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+        )

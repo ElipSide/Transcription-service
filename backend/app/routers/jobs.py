@@ -1,7 +1,11 @@
 import asyncio
+import io
+import re
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 import jwt
 from fastapi import (
@@ -15,7 +19,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,15 +28,17 @@ from ..database import AsyncSessionLocal, get_db
 from ..deps import get_current_user
 from ..models import Job, JobMode, JobStatus, User
 from ..schemas import (
+    ArchiveRequest,
     JobDetail,
     JobListItem,
+    RerunRequest,
     UploadCompleteOut,
     UploadInit,
     UploadInitOut,
 )
 from ..security import ACCESS, decode_token
 from ..services import progress_hub
-from ..services.processor import process_job
+from ..services.processor import process_job, process_rerun
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -43,6 +49,47 @@ def _chunk_dir(upload_id: str) -> Path:
     p = settings.chunk_path / upload_id
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+
+# ---------- Result file naming ----------
+def _safe_stem(name: str) -> str:
+    """Audio file name without extension, safe to use as a file name."""
+    stem = Path(name).stem
+    return re.sub(r'[\\/:*?"<>|]', "_", stem).strip() or "file"
+
+
+def _result_filename(job: Job, kind: str) -> str:
+    """'Транскрибация - meeting.pdf' / 'Отчёт - meeting.pdf' / 'Выдержка - meeting.pdf'.
+
+    The 'report' file holds the business report or the AI summary depending on
+    the job mode, so the prefix follows the mode.
+    """
+    if kind == "transcript":
+        prefix = "Транскрибация"
+    elif job.mode == JobMode.ai_extract:
+        prefix = "Выдержка"
+    else:
+        prefix = "Отчёт"
+    return f"{prefix} - {_safe_stem(job.original_filename)}.pdf"
+
+
+def _unique_name(name: str, used: set[str]) -> str:
+    """Keep archive entries distinct when two jobs share an audio file name."""
+    if name not in used:
+        used.add(name)
+        return name
+    stem, _, ext = name.rpartition(".")
+    i = 2
+    while f"{stem} ({i}).{ext}" in used:
+        i += 1
+    out = f"{stem} ({i}).{ext}"
+    used.add(out)
+    return out
+
+
+def _content_disposition(filename: str) -> dict[str, str]:
+    """RFC 5987 header so Cyrillic names survive."""
+    return {"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"}
 
 
 async def _get_owned_job(db: AsyncSession, job_id: uuid.UUID, user: User) -> Job:
@@ -69,6 +116,7 @@ async def upload_init(
         original_filename=payload.filename[:512],
         file_size=payload.file_size,
         mode=payload.mode,
+        batch_id=payload.batch_id,
         status=JobStatus.uploading,
     )
     db.add(job)
@@ -132,6 +180,46 @@ async def upload_complete(
     return UploadCompleteOut(job_id=job.id)
 
 
+@router.post("/{job_id}/rerun", response_model=UploadCompleteOut)
+async def rerun_job(
+    job_id: uuid.UUID,
+    payload: RerunRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UploadCompleteOut:
+    """Process an already-recognized file in another mode.
+
+    Creates a new job that reuses the existing transcript, so recognition is not
+    repeated — only the AI stage runs. The derived job intentionally has no
+    stored_path: it never needs the audio, and that keeps deleting either job
+    from removing a file the other one relies on.
+    """
+    src = await _get_owned_job(db, job_id, user)
+    if src.status != JobStatus.completed or not src.result_text:
+        raise HTTPException(
+            status_code=409,
+            detail="Повторная обработка доступна только для завершённых задач с готовой транскрипцией",
+        )
+
+    job = Job(
+        user_id=user.id,
+        original_filename=src.original_filename,
+        file_size=src.file_size,
+        mode=payload.mode,
+        status=JobStatus.queued,
+        stage_message="В очереди…",
+        result_text=src.result_text,
+        result_segments=src.result_segments,
+        diarization_note=src.diarization_note,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    asyncio.create_task(process_rerun(job.id))
+    return UploadCompleteOut(job_id=job.id)
+
+
 # ---------- Listing / detail ----------
 @router.get("", response_model=list[JobListItem])
 async def list_jobs(
@@ -191,8 +279,60 @@ async def download(
     path = mapping.get(kind)
     if not path or not Path(path).exists():
         raise HTTPException(status_code=404, detail="Файл недоступен")
-    base = Path(job.original_filename).stem
-    return FileResponse(path, filename=f"{base}_{kind}.pdf", media_type="application/pdf")
+    return FileResponse(
+        path,
+        filename=_result_filename(job, kind),
+        media_type="application/pdf",
+    )
+
+
+def _build_zip(entries: list[tuple[str, str]]) -> bytes:
+    """entries: [(source_path, name_in_archive)]. Runs in a thread — file IO."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for src, arcname in entries:
+            zf.write(src, arcname=arcname)
+    return buf.getvalue()
+
+
+@router.post("/archive")
+async def download_archive(
+    payload: ArchiveRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Download results of several jobs as one ZIP (batch upload -> batch download)."""
+    rows = await db.scalars(
+        select(Job)
+        .where(Job.id.in_(payload.job_ids), Job.user_id == user.id)
+        .order_by(Job.created_at)
+    )
+    jobs = list(rows)
+    if not jobs:
+        raise HTTPException(status_code=404, detail="Задачи не найдены")
+
+    entries: list[tuple[str, str]] = []
+    used: set[str] = set()
+    for job in jobs:
+        wanted: list[tuple[str, str | None]] = []
+        if payload.kind in ("all", "transcript"):
+            wanted.append(("transcript", job.transcript_pdf_path))
+        if payload.kind in ("all", "report"):
+            wanted.append(("report", job.report_pdf_path))
+        for kind, path in wanted:
+            if path and Path(path).exists():
+                entries.append((path, _unique_name(_result_filename(job, kind), used)))
+
+    if not entries:
+        raise HTTPException(status_code=404, detail="Нет готовых файлов для скачивания")
+
+    data = await asyncio.to_thread(_build_zip, entries)
+    label = {"transcript": "Транскрибации", "report": "Отчёты"}.get(payload.kind, "Разбор")
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers=_content_disposition(f"{label} ({len(entries)}).zip"),
+    )
 
 
 # ---------- Live progress (browser-facing WebSocket) ----------

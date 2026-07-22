@@ -17,13 +17,18 @@ from ..database import AsyncSessionLocal
 from ..models import Job, JobMode, JobStatus
 from . import diar_client, progress_hub
 from .deepseek import report_generator
-from .pdf import html_to_pdf, text_to_pdf
+from .pdf import html_to_pdf, markdown_to_pdf, segments_to_pdf, text_to_pdf
 
 logger = logging.getLogger("transcribe.processor")
 
 # Jobs currently being processed in this event loop. Guards against the same
 # job being dispatched twice (e.g. by upload_complete and the retry loop).
 _inflight: set[uuid.UUID] = set()
+
+# Bounds heavy work (ffmpeg + recognition). Uploading a batch of files starts a
+# task per file; without this they'd all normalize at once. The rest simply wait
+# their turn, which is what the user sees as "В очереди".
+_slots = asyncio.Semaphore(max(1, settings.max_concurrent_jobs))
 
 
 def _user_dir(user_id: uuid.UUID) -> Path:
@@ -79,7 +84,11 @@ async def process_job(job_id: uuid.UUID) -> None:
                 logger.error("process_job: job %s not found", job_id)
                 return
             try:
-                await _run(db, job)
+                if _slots.locked():
+                    await _set(db, job, status=JobStatus.queued, progress=0,
+                               stage_message="В очереди на обработку…")
+                async with _slots:
+                    await _run(db, job)
             except Exception as e:  # noqa: BLE001
                 logger.exception("Job %s failed", job_id)
                 await _set(
@@ -137,6 +146,13 @@ async def _run(db: AsyncSession, job: Job) -> None:
                           "и начнётся автоматически, как только сервис вернётся.",
         )
         return
+    # The normalized copy exists only to be uploaded; drop it now instead of
+    # letting a 16 kHz WAV pile up per job. Re-runs re-create it from the source.
+    try:
+        wav_path.unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("Could not remove temp wav %s: %s", wav_path, e)
+
     await _set(db, job, diar_task_id=task_id, stage_message="В очереди на распознавание…")
 
     # 3) stream status
@@ -175,16 +191,33 @@ async def _run(db: AsyncSession, job: Job) -> None:
                result_text=result_text, result_segments=result_segments,
                diarization_note=note)
 
-    # 4) save transcript txt + pdf
+    await _finalize(db, job, result_text, result_segments, work_dir)
+
+
+async def _finalize(
+    db: AsyncSession,
+    job: Job,
+    result_text: str,
+    result_segments: list | None,
+    work_dir: Path,
+) -> None:
+    """Transcript PDF + mode-specific AI report + mark completed.
+
+    Shared by a fresh run and by a re-run in a different mode (which reuses an
+    existing transcript and therefore needs no audio / DiarService).
+    """
+    # 1) transcript pdf — styled like the web (speaker colors / dialogue)
+    #    when we have diarized segments, plain text as a fallback.
     base = work_dir / f"{job.id}"
-    await asyncio.to_thread(
-        text_to_pdf, result_text, base.with_name(f"{job.id}_transcript.pdf")
-    )
     transcript_pdf = base.with_name(f"{job.id}_transcript.pdf")
+    if result_segments:
+        await asyncio.to_thread(segments_to_pdf, result_segments, transcript_pdf)
+    else:
+        await asyncio.to_thread(text_to_pdf, result_text, transcript_pdf)
     if transcript_pdf.exists():
         job.transcript_pdf_path = str(transcript_pdf)
 
-    # 5) mode-specific report via DeepSeek
+    # 2) mode-specific report via DeepSeek
     if job.mode in (JobMode.report, JobMode.ai_extract) and settings.deepseek_api_key:
         await _set(db, job, progress=94, stage_message="Формирование отчёта (AI)…")
         if job.mode == JobMode.report:
@@ -201,7 +234,7 @@ async def _run(db: AsyncSession, job: Job) -> None:
                 job.report_html = summary
                 pdf_path = base.with_name(f"{job.id}_extract.pdf")
                 await asyncio.to_thread(
-                    text_to_pdf, summary, pdf_path, "AI-выжимка"
+                    markdown_to_pdf, summary, pdf_path, "AI-выжимка"
                 )
                 if pdf_path.exists():
                     job.report_pdf_path = str(pdf_path)
@@ -210,27 +243,70 @@ async def _run(db: AsyncSession, job: Job) -> None:
                stage_message="Готово", error=None)
 
 
+async def process_rerun(job_id: uuid.UUID) -> None:
+    """Re-process a job in a different mode, reusing an existing transcript.
+
+    No ffmpeg, no DiarService, no GPU — only the AI stage and PDFs.
+    """
+    if job_id in _inflight:
+        return
+    _inflight.add(job_id)
+    try:
+        async with AsyncSessionLocal() as db:
+            job = await db.get(Job, job_id)
+            if job is None:
+                logger.error("process_rerun: job %s not found", job_id)
+                return
+            try:
+                if not job.result_text:
+                    await _set(db, job, status=JobStatus.failed,
+                               error="Нет исходной транскрипции для повторной обработки")
+                    return
+                await _set(db, job, status=JobStatus.processing, progress=60,
+                           stage_message="Повторная обработка готовой транскрипции…")
+                await _finalize(
+                    db, job, job.result_text, job.result_segments,
+                    _user_dir(job.user_id),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.exception("Rerun %s failed", job_id)
+                await _set(
+                    db, job, status=JobStatus.failed,
+                    error=f"Внутренняя ошибка обработки: {e}",
+                )
+    finally:
+        _inflight.discard(job_id)
+
+
 # ---------------------------------------------------------------------------
 # Reconciler: retries jobs that are waiting on DiarService, and recovers jobs
 # orphaned by a backend restart. Started once from the app lifespan.
 # ---------------------------------------------------------------------------
-async def _dispatch_pending() -> int:
-    """Dispatch every job that is waiting for DiarService (or a queued orphan
-    left by a restart) and isn't already in flight. Returns how many started."""
+async def _dispatch_pending(diar_ok: bool) -> int:
+    """Dispatch pending jobs that aren't already in flight.
+
+    Full jobs (with audio) need DiarService; re-runs (transcript already there,
+    no stored audio) don't, so they're recovered regardless.
+    """
     async with AsyncSessionLocal() as db:
         rows = await db.scalars(
             select(Job)
             .where(Job.status.in_((JobStatus.waiting, JobStatus.queued)))
             .order_by(Job.created_at)
         )
-        pending = [j.id for j in rows if j.stored_path]
+        pending = [(j.id, bool(j.stored_path), bool(j.result_text)) for j in rows]
 
     started = 0
-    for job_id in pending:
+    for job_id, has_audio, has_text in pending:
         if job_id in _inflight:
             continue
-        asyncio.create_task(process_job(job_id))
-        started += 1
+        if has_audio:
+            if diar_ok:
+                asyncio.create_task(process_job(job_id))
+                started += 1
+        elif has_text:
+            asyncio.create_task(process_rerun(job_id))
+            started += 1
     return started
 
 
@@ -241,10 +317,10 @@ async def retry_waiting_loop() -> None:
     while True:
         try:
             await asyncio.sleep(interval)
-            if await diar_client.refresh_health():
-                started = await _dispatch_pending()
-                if started:
-                    logger.info("DiarService is up -> dispatched %d pending job(s)", started)
+            diar_ok = await diar_client.refresh_health()
+            started = await _dispatch_pending(diar_ok)
+            if started:
+                logger.info("Dispatched %d pending job(s) (diar_ok=%s)", started, diar_ok)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — never let the loop die

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -25,6 +26,7 @@ class UserOut(BaseModel):
     email: EmailStr
     full_name: str | None
     is_admin: bool
+    is_guest: bool = False
     created_at: datetime
 
 
@@ -51,6 +53,7 @@ class JobListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    batch_id: uuid.UUID | None = None
     original_filename: str
     file_size: int
     mode: JobMode
@@ -75,6 +78,8 @@ class UploadInit(BaseModel):
     filename: str
     file_size: int = Field(ge=0)
     mode: JobMode = JobMode.transcription
+    # Same value for every file of one upload -> they form a downloadable group.
+    batch_id: uuid.UUID | None = None
 
 
 class UploadInitOut(BaseModel):
@@ -84,3 +89,16 @@ class UploadInitOut(BaseModel):
 
 class UploadCompleteOut(BaseModel):
     job_id: uuid.UUID
+
+
+class RerunRequest(BaseModel):
+    """Re-process an existing transcript in another mode."""
+
+    mode: JobMode
+
+
+class ArchiveRequest(BaseModel):
+    """Download the results of several jobs as one ZIP."""
+
+    job_ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+    kind: Literal["all", "transcript", "report"] = "all"

@@ -9,6 +9,7 @@ from .config import settings
 from .database import init_db
 from .routers import auth, jobs
 from .services import diar_client
+from .services.cleanup import cleanup_loop
 from .services.processor import retry_waiting_loop
 
 logging.basicConfig(
@@ -23,11 +24,15 @@ async def lifespan(app: FastAPI):
     # Prime the availability flag and start the DiarService reconciler, which
     # flushes the "waiting" queue once the service becomes reachable again.
     await diar_client.refresh_health()
-    retry_task = asyncio.create_task(retry_waiting_loop())
+    tasks = [
+        asyncio.create_task(retry_waiting_loop()),
+        asyncio.create_task(cleanup_loop()),
+    ]
     try:
         yield
     finally:
-        retry_task.cancel()
+        for t in tasks:
+            t.cancel()
 
 
 app = FastAPI(title="Transcription Service", version="1.0.0", lifespan=lifespan)

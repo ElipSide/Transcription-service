@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # How often the reconciler pings DiarService and flushes the waiting queue.
     diar_health_interval: int = 15
     diar_health_timeout: float = 6.0
+    # How many files may be normalized/recognized at once. The rest wait in the
+    # queue (DiarService itself processes one at a time anyway).
+    max_concurrent_jobs: int = 2
 
     # DeepSeek
     deepseek_api_key: str = ""
@@ -38,6 +41,15 @@ class Settings(BaseSettings):
     storage_dir: str = "storage"
     max_file_size: int = 2 * 1024 * 1024 * 1024
     chunk_dir: str = "storage/chunks"
+
+    # Retention: source audio is dropped once the job is done and old enough.
+    # Results (PDFs, transcript text/segments) are kept indefinitely.
+    audio_retention_days: int = 2
+    chunk_retention_hours: int = 24
+    cleanup_interval_minutes: int = 60
+    # Anonymous sessions: guest accounts and everything they produced are wiped
+    # this long after the session started.
+    guest_retention_hours: int = 24
 
     # ffmpeg
     ffmpeg_bin: str = "ffmpeg"

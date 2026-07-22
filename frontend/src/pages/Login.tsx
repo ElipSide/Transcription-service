@@ -50,6 +50,9 @@ export default function Login() {
         <div className="muted small">
           Нет аккаунта? <Link to="/register">Зарегистрироваться</Link>
         </div>
+        <div className="muted small guest-link">
+          <Link to="/">← Продолжить без входа</Link>
+        </div>
       </form>
     </div>
   );

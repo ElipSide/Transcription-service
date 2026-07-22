@@ -56,6 +56,9 @@ export default function Register() {
         <div className="muted small">
           Уже есть аккаунт? <Link to="/login">Войти</Link>
         </div>
+        <div className="muted small guest-link">
+          <Link to="/">← Продолжить без входа</Link>
+        </div>
       </form>
     </div>
   );

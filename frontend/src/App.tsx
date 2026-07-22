@@ -6,31 +6,23 @@ import JobDetailPage from "./pages/JobDetail";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 
-function Protected({ children }: { children: JSX.Element }) {
-  const { user, loading } = useAuth();
-  if (loading) return <div className="center muted">Загрузка…</div>;
-  return user ? children : <Navigate to="/login" replace />;
-}
-
 export default function App() {
-  const { user, loading } = useAuth();
+  const { user, isGuest, loading } = useAuth();
+  // Registration is optional: an anonymous session starts automatically, so the
+  // app is usable without logging in. Only a *real* account gets bounced away
+  // from the login pages — a guest may well be on the way to signing in.
+  const signedIn = !!user && !isGuest;
+
+  if (loading) return <div className="center muted">Загрузка…</div>;
+
   return (
     <Routes>
-      <Route
-        path="/login"
-        element={loading ? null : user ? <Navigate to="/" replace /> : <Login />}
-      />
+      <Route path="/login" element={signedIn ? <Navigate to="/" replace /> : <Login />} />
       <Route
         path="/register"
-        element={loading ? null : user ? <Navigate to="/" replace /> : <Register />}
+        element={signedIn ? <Navigate to="/" replace /> : <Register />}
       />
-      <Route
-        element={
-          <Protected>
-            <Layout />
-          </Protected>
-        }
-      >
+      <Route element={<Layout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/jobs/:id" element={<JobDetailPage />} />
       </Route>

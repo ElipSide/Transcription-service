@@ -12,6 +12,8 @@ export interface User {
   email: string;
   full_name: string | null;
   is_admin: boolean;
+  /** Anonymous session: results vanish when the tab closes. */
+  is_guest: boolean;
   created_at: string;
 }
 
@@ -25,6 +27,8 @@ export interface Segment {
 
 export interface JobListItem {
   id: string;
+  /** Files uploaded together share this — used to download a group at once. */
+  batch_id: string | null;
   original_filename: string;
   file_size: number;
   mode: JobMode;
