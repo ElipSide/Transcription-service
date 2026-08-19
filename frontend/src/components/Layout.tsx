@@ -45,7 +45,7 @@ function GuestBanner() {
 }
 
 export default function Layout() {
-  const { user, isGuest, logout } = useAuth();
+  const { user, isGuest, sessionError, logout } = useAuth();
   return (
     <div className="app">
       <header className="topbar">
@@ -53,7 +53,12 @@ export default function Layout() {
           🎙 Транскрипция
         </Link>
         <div className="topbar-right">
-          {isGuest ? (
+          {!user ? (
+            // No session at all — never show a logout button that does nothing.
+            <Link to="/login" className="btn">
+              Войти
+            </Link>
+          ) : isGuest ? (
             <>
               <span className="muted small">Гостевой режим</span>
               <Link to="/login" className="btn">
@@ -62,7 +67,7 @@ export default function Layout() {
             </>
           ) : (
             <>
-              <span className="muted">{user?.email}</span>
+              <span className="muted">{user.email}</span>
               <button className="btn ghost" onClick={logout}>
                 Выйти
               </button>
@@ -72,6 +77,7 @@ export default function Layout() {
       </header>
       <DiarStatusBanner />
       {isGuest && <GuestBanner />}
+      {sessionError && <div className="container"><div className="error">{sessionError}</div></div>}
       <main className="container">
         <Outlet />
       </main>

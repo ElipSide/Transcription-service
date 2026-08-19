@@ -65,8 +65,10 @@ async def guest(db: AsyncSession = Depends(get_db)) -> TokenPair:
     guest, the session lives only through its tokens. Guests and their results
     are purged by the cleanup janitor.
     """
+    # example.com is IANA-reserved for documentation: clearly synthetic, yet a
+    # syntactically valid address (".local" is rejected as a reserved domain).
     user = User(
-        email=f"guest-{uuid.uuid4()}@guest.local",
+        email=f"guest-{uuid.uuid4()}@guest.example.com",
         full_name="Гость",
         hashed_password=hash_password(secrets.token_urlsafe(32)),
         is_guest=True,

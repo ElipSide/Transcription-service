@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, downloadArchive, type ArchiveKind } from "../api";
+import { useAuth } from "../auth";
 import Upload from "../components/Upload";
 import type { JobListItem } from "../types";
 import { MODE_LABELS, STATUS_LABELS } from "../types";
@@ -34,6 +35,7 @@ export default function Dashboard() {
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
   const nav = useNavigate();
+  const { user } = useAuth();
 
   const completedIds = useMemo(
     () => jobs.filter((j) => j.status === "completed").map((j) => j.id),
@@ -181,7 +183,7 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard">
-      <Upload onDone={load} />
+      {user && <Upload onDone={load} />}
 
       <div className="card">
         <div className="jobs-head">

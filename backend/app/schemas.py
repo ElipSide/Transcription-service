@@ -23,7 +23,10 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    email: EmailStr
+    # Plain str on purpose: this is an address we already stored, and guest
+    # accounts use a synthetic one. Validation belongs on input (UserRegister /
+    # UserLogin), not on echoing a value back.
+    email: str
     full_name: str | None
     is_admin: bool
     is_guest: bool = False

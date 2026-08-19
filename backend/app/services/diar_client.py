@@ -41,15 +41,21 @@ _available: bool = True
 
 
 async def health(timeout: float | None = None) -> bool:
-    """True if DiarService answers at all (any non-5xx HTTP response).
+    """True only if the DiarService *app* answers (not just nginx in front).
 
-    A connection refusal / timeout (service down or unreachable) -> False.
+    Hits the app's /health and follows redirects, so a dead uvicorn behind a
+    live nginx (502/503/504) is correctly reported as down — unlike pinging the
+    nginx root, which returns a 301 even when the app is gone.
     """
-    url = settings.diar_base_url
+    url = settings.diar_base_url.rstrip("/") + "/health"
     to = timeout if timeout is not None else settings.diar_health_timeout
     try:
-        async with httpx.AsyncClient(timeout=to, verify=settings.diar_verify_ssl) as client:
+        async with httpx.AsyncClient(
+            timeout=to, verify=settings.diar_verify_ssl, follow_redirects=True
+        ) as client:
             resp = await client.get(url)
+        # <500 covers 200 (new /health) and 404 (older DiarService without it);
+        # 502/503/504 from nginx -> app down -> False.
         return resp.status_code < 500
     except Exception:  # noqa: BLE001 — any transport error means "down"
         return False
