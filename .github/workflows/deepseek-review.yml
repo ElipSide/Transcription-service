@@ -1,0 +1,69 @@
+name: DeepSeek PR Review
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - id: check
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -n "$DEEPSEEK_API_KEY" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+            echo "DEEPSEEK_API_KEY не задан — ревью пропущено."
+          fi
+
+  review:
+    needs: guard
+    if: needs.guard.outputs.has_key == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Собрать diff
+        run: |
+          git diff --unified=3 "origin/${{ github.base_ref }}...HEAD" > diff.full
+          head -c 150000 diff.full > diff.txt
+
+      - name: Спросить DeepSeek
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          jq -n \
+            --arg sys "Ты Senior Python ревьюер. Проверь diff: корректность, обработка исключений, изменяемые значения по умолчанию, утечки ресурсов и незакрытые файлы/соединения, гонки в async/threading, типизация и аннотации, соответствие PEP 8. Только замечания, по пунктам, каждое с файлом и строкой. Максимум 10 замечаний. Каждое замечание — про своё место в коде, повторять уже сказанное запрещено. Код не переписывай. Нет замечаний — напиши 'Замечаний нет'." \
+            --rawfile diff diff.txt \
+            '{model:"deepseek-chat",
+              temperature:0.2,
+              max_tokens:2000,
+              frequency_penalty:0.5,
+              presence_penalty:0.2,
+              messages:[{role:"system",content:$sys},
+                        {role:"user",content:("Diff пулл-реквеста:\n\n" + $diff)}]}' \
+            > payload.json
+
+          curl -sS https://api.deepseek.com/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $DEEPSEEK_API_KEY" \
+            -d @payload.json > resp.json
+
+          jq -r '.choices[0].message.content // "DeepSeek вернул ошибку, см. лог"' resp.json > review.md
+          cat resp.json
+
+      - name: Запостить комментарий
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file review.md
