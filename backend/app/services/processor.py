@@ -38,17 +38,38 @@ def _user_dir(user_id: uuid.UUID) -> Path:
 
 
 def normalize_to_wav(input_path: Path, out_dir: Path) -> Path:
-    """Convert any audio/video to 16 kHz mono PCM WAV (same as the bot did)."""
+    """Convert any audio/video to 16 kHz mono PCM WAV.
+
+    Tolerant to corrupt input (e.g. phone recordings with damaged AAC frames):
+    input-side flags skip broken packets instead of aborting; if ffmpeg still
+    exits non-zero but wrote a usable WAV, we keep the partial audio rather than
+    failing the whole job.
+    """
     out_wav = out_dir / f"{input_path.stem}_16k.wav"
     cmd = [
         settings.ffmpeg_bin, "-y",
+        "-err_detect", "ignore_err",     # don't abort on decode errors
+        "-fflags", "+discardcorrupt",    # drop corrupt packets
         "-i", str(input_path),
+        "-vn", "-sn", "-dn",             # audio only (ignore video/subs/data streams)
         "-ac", "1",
         "-ar", "16000",
         "-c:a", "pcm_s16le",
         str(out_wav),
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    proc = subprocess.run(cmd, capture_output=True)
+    if proc.returncode != 0:
+        # Best-effort: corrupt frames may still have yielded most of the audio.
+        # A valid WAV header is 44 bytes, so anything meaningfully larger is usable.
+        if out_wav.exists() and out_wav.stat().st_size > 1024:
+            logger.warning(
+                "ffmpeg exited %d for %s but produced %d bytes — using partial audio",
+                proc.returncode, input_path.name, out_wav.stat().st_size,
+            )
+            return out_wav
+        raise subprocess.CalledProcessError(
+            proc.returncode, cmd, proc.stdout, proc.stderr
+        )
     return out_wav
 
 
@@ -137,8 +158,8 @@ async def _run(db: AsyncSession, job: Job) -> None:
         # Meaningful HTTP rejection (e.g. 413 too large) -> a real failure.
         await _set(db, job, status=JobStatus.failed, error=str(e))
         return
-    except Exception as e:  # noqa: BLE001 — transport error: service dropped mid-submit
-        logger.warning("Upload to DiarService failed, re-queuing job %s: %s", job.id, e)
+    except Exception as e:  # noqa: BLE001 — 5xx/gateway (DiarUnavailableError) or transport drop
+        logger.warning("Upload to DiarService unavailable, re-queuing job %s: %s", job.id, e)
         diar_client._available = False  # reflect immediately in the status banner
         await _set(
             db, job, status=JobStatus.waiting, progress=0, error=None,

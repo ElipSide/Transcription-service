@@ -310,6 +310,7 @@ input:focus { outline: 2px solid var(--primary); border-color: var(--primary); }
 
 .progress.mini { height: 20px; margin: 0.5rem 0 0; }
 .progress.mini .progress-label { font-size: 0.72rem; }
+.waiting-note { margin-top: 0.35rem; color: #4338ca; }
 
 /* ---- Downloads card ---- */
 .downloads-card { background: linear-gradient(180deg, #f0f6ff, #ffffff); border-color: #cfe0ff; }

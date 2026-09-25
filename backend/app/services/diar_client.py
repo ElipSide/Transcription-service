@@ -31,7 +31,11 @@ def _ws_ssl_context():
 
 
 class DiarUploadError(Exception):
-    """Raised when DiarService rejects an upload with a meaningful HTTP error."""
+    """DiarService rejected the file for a real reason (4xx) — a hard failure."""
+
+
+class DiarUnavailableError(Exception):
+    """DiarService temporarily unreachable (5xx/gateway) — should be retried."""
 
 
 # ---- Availability tracking ---------------------------------------------------
@@ -101,6 +105,12 @@ async def upload(file_path: Path) -> str:
         raise DiarUploadError(
             "Файл слишком большой для сервиса распознавания. "
             "Увеличьте client_max_body_size в nginx DiarService (на стороне 109.202.9.107)."
+        )
+    if resp.status_code >= 500:
+        # 500/502/503/504 — приложение за nginx лежит/перегружено. Это временно:
+        # задачу нужно поставить в очередь и повторить, а не ронять в failed.
+        raise DiarUnavailableError(
+            f"Сервис распознавания временно недоступен (HTTP {resp.status_code})"
         )
     if resp.status_code >= 400:
         body = resp.text[:200].replace("\n", " ")

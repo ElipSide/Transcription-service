@@ -156,13 +156,19 @@ export default function Dashboard() {
           <div className="job-sub muted small">
             {MODE_LABELS[j.mode]} · {fmtDate(j.created_at)}
           </div>
-          {active && (
-            <div className="progress mini">
-              <div className="progress-bar" style={{ width: `${j.progress}%` }} />
-              <span className="progress-label">
-                {j.stage_message ?? STATUS_LABELS[j.status]} · {j.progress}%
-              </span>
+          {j.status === "waiting" ? (
+            <div className="muted small waiting-note">
+              ⏸️ {j.stage_message ?? "Сервис распознавания недоступен — задача ждёт в очереди."}
             </div>
+          ) : (
+            active && (
+              <div className="progress mini">
+                <div className="progress-bar" style={{ width: `${j.progress}%` }} />
+                <span className="progress-label">
+                  {j.stage_message ?? STATUS_LABELS[j.status]} · {j.progress}%
+                </span>
+              </div>
+            )
           )}
         </div>
 
