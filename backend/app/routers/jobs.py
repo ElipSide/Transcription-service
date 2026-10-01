@@ -223,14 +223,19 @@ async def rerun_job(
 # ---------- Listing / detail ----------
 @router.get("", response_model=list[JobListItem])
 async def list_jobs(
+    batch_id: uuid.UUID | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[Job]:
-    rows = await db.scalars(
-        select(Job)
-        .where(Job.user_id == user.id, Job.status != JobStatus.uploading)
-        .order_by(Job.created_at.desc())
-    )
+    """List the caller's jobs (lightweight items, no result_text/segments).
+
+    Pass ?batch_id=<uuid> to get just one upload group — one request polls a
+    whole batch instead of hitting GET /jobs/{id} per file.
+    """
+    stmt = select(Job).where(Job.user_id == user.id, Job.status != JobStatus.uploading)
+    if batch_id is not None:
+        stmt = stmt.where(Job.batch_id == batch_id)
+    rows = await db.scalars(stmt.order_by(Job.created_at.desc()))
     return list(rows)
 
 

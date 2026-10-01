@@ -112,3 +112,39 @@ class Job(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="jobs")
+
+
+class ServiceToken(Base):
+    """Long-lived, opaque API token for machine integrations (e.g. the call
+    archive). Acts as its owning user on the jobs endpoints — an alternative to
+    storing that account's password and juggling the 14-day refresh cycle.
+
+    Only the SHA-256 hash is stored; the raw token is shown once at creation.
+    The token is high-entropy random, so a fast hash is sufficient (unlike user
+    passwords, which stay bcrypt-hashed).
+    """
+
+    __tablename__ = "service_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    # Comma-separated scopes, reserved for future narrowing. Today a token acts
+    # as its owner across the jobs endpoints.
+    scopes: Mapped[str] = mapped_column(String(255), default="jobs", nullable=False)
+    revoked: Mapped[bool] = mapped_column(default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, nullable=False
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    user: Mapped["User"] = relationship()

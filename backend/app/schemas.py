@@ -43,6 +43,27 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+# ===== Service tokens (machine integrations) =====
+class ServiceTokenCreate(BaseModel):
+    name: str = Field(default="", max_length=255)
+
+
+class ServiceTokenOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    scopes: str
+    revoked: bool
+    created_at: datetime
+    last_used_at: datetime | None = None
+
+
+class ServiceTokenCreated(ServiceTokenOut):
+    # Raw token — returned only once, at creation; never stored or shown again.
+    token: str
+
+
 # ===== Jobs =====
 class Segment(BaseModel):
     id: int | None = None
