@@ -145,9 +145,9 @@ async def create_service_token(
     db.add(st)
     await db.commit()
     await db.refresh(st)
-    out = ServiceTokenCreated.model_validate(st)
-    out.token = raw  # shown once
-    return out
+    # token is not an ORM attribute, so validate the stored fields first, then
+    # attach the raw token (shown this once only).
+    return ServiceTokenCreated(**ServiceTokenOut.model_validate(st).model_dump(), token=raw)
 
 
 @router.get("/service-tokens", response_model=list[ServiceTokenOut])
