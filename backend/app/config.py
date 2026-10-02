@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # How often the reconciler pings DiarService and flushes the waiting queue.
     diar_health_interval: int = 15
     diar_health_timeout: float = 6.0
+    # If DiarService sends no status frame for this long, consider the task stuck,
+    # re-queue the job and free the slot (prevents one dead task from freezing a
+    # concurrency slot forever).
+    diar_stream_idle_timeout: int = 900
     # How many files may be normalized/recognized at once. The rest wait in the
     # queue (DiarService itself processes one at a time anyway).
     max_concurrent_jobs: int = 2

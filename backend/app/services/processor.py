@@ -180,21 +180,44 @@ async def _run(db: AsyncSession, job: Job) -> None:
     result_text: str | None = None
     result_segments: list | None = None
     diarization_error: str | None = None
-    async for upd in diar_client.stream_status(task_id):
-        if upd.diarization_error:
-            diarization_error = upd.diarization_error
-        if upd.status == "failed":
-            await _set(db, job, status=JobStatus.failed,
-                       error=upd.error or "Ошибка распознавания")
-            return
-        if upd.status == "completed":
-            result_text = upd.result_text or ""
-            result_segments = upd.result_segments
-            break
-        # processing / queued
-        job.progress = max(job.progress, min(90, 5 + int(upd.progress * 0.85)))
-        job.stage_message = upd.message or "Распознавание…"
-        await _publish(db, job)
+    agen = diar_client.stream_status(task_id)
+    idle = max(60, settings.diar_stream_idle_timeout)
+    try:
+        while True:
+            try:
+                upd = await asyncio.wait_for(agen.__anext__(), timeout=idle)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                # DiarService went silent (dead/stuck task). Don't hold the slot
+                # forever: re-queue and let the reconciler retry once it's healthy.
+                logger.warning(
+                    "DiarService silent for %ss on job %s (task %s) -> re-queue",
+                    idle, job.id, task_id,
+                )
+                diar_client._available = False
+                await _set(
+                    db, job, status=JobStatus.waiting, progress=0, error=None,
+                    stage_message="Сервис распознавания не отвечает — задача вернулась "
+                                  "в очередь и будет повторена автоматически.",
+                )
+                return
+            if upd.diarization_error:
+                diarization_error = upd.diarization_error
+            if upd.status == "failed":
+                await _set(db, job, status=JobStatus.failed,
+                           error=upd.error or "Ошибка распознавания")
+                return
+            if upd.status == "completed":
+                result_text = upd.result_text or ""
+                result_segments = upd.result_segments
+                break
+            # processing / queued
+            job.progress = max(job.progress, min(90, 5 + int(upd.progress * 0.85)))
+            job.stage_message = upd.message or "Распознавание…"
+            await _publish(db, job)
+    finally:
+        await agen.aclose()
 
     if result_text is None:
         await _set(db, job, status=JobStatus.failed, error="Пустой результат распознавания")
