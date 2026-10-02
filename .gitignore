@@ -36,3 +36,6 @@ Thumbs.db
 # ===== Logs =====
 *.log
 logs/
+
+# Claude Code local settings (per-machine permissions, never commit)
+.claude/settings.local.json
