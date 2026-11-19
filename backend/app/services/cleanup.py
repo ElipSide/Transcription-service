@@ -101,6 +101,23 @@ async def purge_abandoned_uploads() -> int:
         except OSError as e:
             logger.warning("Could not clean chunk dir %s: %s", d, e)
 
+    # Temp files of single-request uploads interrupted by a hard kill (the
+    # endpoint itself deletes them on any handled failure).
+    def _scan_parts() -> list[Path]:
+        try:
+            return [
+                p
+                for udir in (settings.storage_path / "users").iterdir()
+                if udir.is_dir()
+                for p in udir.glob(".*.part")
+                if now - p.stat().st_mtime > max_age
+            ]
+        except OSError:
+            return []
+
+    for f in await asyncio.to_thread(_scan_parts):
+        freed += await asyncio.to_thread(_unlink, f)
+
     if removed:
         # These jobs never got a file, carry no results and are hidden from the
         # UI (list_jobs filters out `uploading`) — pure leftovers.

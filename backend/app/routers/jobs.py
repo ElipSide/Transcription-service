@@ -12,6 +12,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Query,
     UploadFile,
@@ -97,6 +98,71 @@ async def _get_owned_job(db: AsyncSession, job_id: uuid.UUID, user: User) -> Job
     if job is None or job.user_id != user.id:
         raise HTTPException(status_code=404, detail="Задача не найдена")
     return job
+
+
+# ---------- Upload ----------
+@router.post("/upload", response_model=UploadCompleteOut)
+async def upload_direct(
+    file: UploadFile = File(...),
+    mode: JobMode = Form(JobMode.transcription),
+    batch_id: uuid.UUID | None = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UploadCompleteOut:
+    """Single-request upload: the whole file as one multipart form field.
+
+    The convenient path for machine integrations and modest files; anything
+    large should use the chunked flow below — it is also the only way past
+    proxy body-size limits this endpoint is subject to.
+    """
+    user_dir = settings.storage_path / "users" / str(user.id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = user_dir / f".{uuid.uuid4().hex}.part"
+
+    # Stream to a temp file first: an interrupted body or a size violation must
+    # not leave a job row (or a half-file under its final name) behind.
+    size = 0
+    try:
+        with open(tmp_path, "wb") as out:
+            while data := await file.read(1024 * 1024):
+                size += len(data)
+                if size > settings.max_file_size:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Файл слишком большой "
+                            f"(макс. {settings.max_file_size // (1024*1024)} МБ)"
+                        ),
+                    )
+                out.write(data)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    if size == 0:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Получен пустой файл")
+
+    name = (file.filename or "").strip()[:512] or "file"
+    job_id = uuid.uuid4()
+    final_path = user_dir / f"{job_id}{Path(name).suffix}"
+    tmp_path.replace(final_path)
+
+    job = Job(
+        id=job_id,
+        user_id=user.id,
+        original_filename=name,
+        file_size=size,
+        stored_path=str(final_path),
+        mode=mode,
+        batch_id=batch_id,
+        status=JobStatus.queued,
+        stage_message="В очереди…",
+    )
+    db.add(job)
+    await db.commit()
+
+    asyncio.create_task(process_job(job_id))
+    return UploadCompleteOut(job_id=job_id)
 
 
 # ---------- Chunked upload ----------

@@ -45,13 +45,31 @@ curl -s -X POST https://csort-news.ru/transcribe/api/auth/login \
   ```
 - Проверить, кто вы: `GET /api/auth/me`.
 
-### 1.2. Загрузка файла (chunked)
+### 1.2. Загрузка файла
 
-Файл заливается частями по 8 МБ. Лимит — 2 ГБ. Три шага:
+**Простой способ — одним запросом** (рекомендуется для файлов до ~500 МБ):
 
 ```bash
 TOKEN="<access_token>"
 BASE="https://csort-news.ru/transcribe/api"
+
+curl -s -X POST "$BASE/jobs/upload" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@meeting.ogg" \
+  -F "mode=transcription"          # опц.: transcription | report | ai_extract
+# -> {"job_id":"..."}   — задача сразу в очереди
+```
+
+Поля формы: `file` (обязательно), `mode`, `batch_id` *(опц.)* — один UUID на
+группу файлов, чтобы потом скачать их архивом одной пачкой. Файл любого
+аудио/видео формата — конвертация в WAV 16 кГц идёт на сервере.
+
+Потолок одного запроса задаёт прокси (сейчас 512 МБ); что больше — заливайте
+частями:
+
+**Большие файлы — частями по 8 МБ** (лимит — 2 ГБ). Три шага:
+
+```bash
 FILE="meeting.ogg"
 
 # 1) init — регистрируем загрузку, получаем upload_id (= job_id) и размер части
@@ -160,18 +178,10 @@ BASE = "https://csort-news.ru/transcribe/api"
 tok = requests.post(f"{BASE}/auth/guest").json()["access_token"]
 H = {"Authorization": f"Bearer {tok}"}
 
-# 2) загрузка
-path, name = "meeting.ogg", "meeting.ogg"
-data = open(path, "rb").read()
-init = requests.post(f"{BASE}/jobs/upload/init", headers=H,
-                     json={"filename": name, "file_size": len(data),
-                           "mode": "transcription"}).json()
-uid, chunk = init["upload_id"], init["chunk_size"]
-for i in range(0, len(data), chunk):
-    requests.post(f"{BASE}/jobs/upload/{uid}/chunk", headers=H,
-                  params={"index": i // chunk},
-                  files={"chunk": data[i:i + chunk]})
-job = requests.post(f"{BASE}/jobs/upload/{uid}/complete", headers=H).json()["job_id"]
+# 2) загрузка — одним запросом (для больших файлов есть chunked, см. §1.2)
+job = requests.post(f"{BASE}/jobs/upload", headers=H,
+                    files={"file": open("meeting.ogg", "rb")},
+                    data={"mode": "transcription"}).json()["job_id"]
 
 # 3) ожидание
 while True:
@@ -311,6 +321,8 @@ refresh мёртв и нужен повторный логин по паролю
 
 ### 3.4. Очередь и темп заливки
 
+- Каждый файл заливается **одним запросом** `POST /api/jobs/upload` (§1.2) —
+  удобно в цикле по выгрузке: получили `job_id`, дальше опрос статуса.
 - Распознавание идёт на **одном общем GPU**; бэкенд обрабатывает одновременно
   ограниченное число задач (сейчас 2), остальные стоят в `queued`.
 - Если сервис распознавания временно недоступен, задача уходит в `waiting` и
@@ -366,6 +378,8 @@ curl -s "$BASE/jobs?batch_id=$BATCH" -H "Authorization: Bearer $TOKEN"
 
 **Ограничения**
 - Максимальный размер файла: **2 ГБ**.
+- Загрузка одним запросом (`POST /api/jobs/upload`): до **512 МБ** (лимит
+  прокси); крупнее — частями.
 - Размер части при загрузке: **8 МБ** (значение из ответа `init`).
 - `access_token`: 30 минут; `refresh_token`: 14 дней.
 - Гостевые данные удаляются через ~24 часа.
@@ -376,4 +390,4 @@ curl -s "$BASE/jobs?batch_id=$BATCH" -H "Authorization: Bearer $TOKEN"
 | `401` | нет/просрочен токен → обновить через `refresh` |
 | `404` | задача не найдена / файл недоступен |
 | `409` | загрузка уже завершена / rerun недоступен для незавершённой задачи |
-| `413` | файл больше лимита |
+| `413` | файл больше лимита (для одного запроса — смотрите также лимит прокси) |
