@@ -143,8 +143,10 @@ git pull --ff-only
 # (если рабочая копия «грязная» после старых деплоев синком файлов:
 #  git fetch && git reset --hard origin/master)
 
-docker compose up -d --build      # пересобрать изменившиеся образы и перезапустить
-docker compose logs -f backend    # убедиться, что поднялся без ошибок
+docker-compose up -d --build      # пересобрать изменившиеся образы и перезапустить
+                                  # (на sammy standalone docker-compose v2; если у вас
+                                  #  плагин — команда выглядит как `docker compose`)
+docker-compose logs -f backend    # убедиться, что поднялся без ошибок
 
 # 3) быстрая проверка после деплоя
 curl -s https://csort-news.ru/transcribe/api/health                 # {"status":"ok"}
