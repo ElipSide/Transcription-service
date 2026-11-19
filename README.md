@@ -17,7 +17,8 @@ Backend (FastAPI)  ──upload/WS──▶  DiarService (109.202.9.107:8443)
 
 ## Возможности
 - Регистрация и вход (email + пароль, JWT). Каждый пользователь видит **только свои** файлы.
-- Загрузка больших файлов (до 2 ГБ) частями (chunked upload) — без Telegram и tdlib.
+- Загрузка файлов: **одним запросом** (до 512 МБ, `POST /api/jobs/upload`) или
+  **частями по 8 МБ** (до 2 ГБ, chunked) — без Telegram и tdlib.
 - Три режима: **Транскрипция**, **Деловой отчёт** (AI), **AI-выжимка** (AI).
 - Прогресс обработки в реальном времени (WebSocket).
 - Просмотр транскрипции по сегментам (спикер + таймкоды), скачивание PDF.
@@ -122,6 +123,70 @@ npm run build        # результат в frontend/dist — раздать л
    раздать `frontend/dist` через nginx; проксировать `/transcribe/api/` (вкл. WebSocket) на бэкенд.
 4. DiarService должен быть доступен по адресам из `.env`.
 
+---
+
+## Обновление прода (деплой)
+
+Прод: **https://csort-news.ru/transcribe/** — сервер `sammy` (185.209.31.149),
+каталог `/home/sammy/Transcription-service`, поднят docker compose
+(внешний nginx хоста проксирует `/transcribe/` → `127.0.0.1:8095`).
+
+```bash
+# 1) локально: закоммитить и отправить (прод тянет с форка ElipSide)
+git push origin master
+git push elipside master
+
+# 2) на сервере
+ssh sammy
+cd ~/Transcription-service
+git pull --ff-only
+# (если рабочая копия «грязная» после старых деплоев синком файлов:
+#  git fetch && git reset --hard origin/master)
+
+docker compose up -d --build      # пересобрать изменившиеся образы и перезапустить
+docker compose logs -f backend    # убедиться, что поднялся без ошибок
+
+# 3) быстрая проверка после деплоя
+curl -s https://csort-news.ru/transcribe/api/health                 # {"status":"ok"}
+curl -s https://csort-news.ru/transcribe/api/openapi.json | grep -c '/api/jobs/upload'
+curl -s -X POST https://csort-news.ru/transcribe/api/jobs/upload \
+  -F 'file=@/dev/null'                                             # 401 = эндпоинт жив
+```
+
+- Данные (БД — том `db-data`, файлы — том `storage`) при пересборке не трогаются.
+- Новые таблицы БД создаются автоматически при старте (`init_db`); **изменение
+  колонок существующих таблиц** миграциями не накатывается — при таких правках
+  ALTER вручную.
+- Изменился `frontend/nginx.conf` или код фронтенда — пересобирается образ
+  `frontend` (лимит тела и проксирование вшиты в образ), бэкенда — `backend`.
+  `docker compose up -d --build` пересоберёт только нужный.
+
+### Внешний прокси (nginx хоста)
+
+`/etc/nginx/sites-available/dom.conf`, блок `location /transcribe/`, должен
+содержать (актуально для однозапросной загрузки и WebSocket-прогресса):
+
+```nginx
+location /transcribe/ {
+    proxy_pass http://127.0.0.1:8095;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;         # WebSocket (live-прогресс)
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_read_timeout 3600s;                       # длинные загрузки и распознавание
+    proxy_send_timeout 3600s;
+    proxy_request_buffering off;                    # тело сразу в контейнер, без буфера на диск
+    client_max_body_size 512m;                      # ≥ лимита однозапросной загрузки (см. docs/API.md)
+}
+```
+
+Правки прокси: `sudo nginx -t && sudo systemctl reload nginx`.
+Внутренний nginx фронтенд-контейнера (`frontend/nginx.conf`) уже настроен так же
+(512 МБ для `/transcribe/api/`); правится в репозитории и приезжает с деплоем.
+
 ## Структура
 ```
 backend/app/
@@ -129,7 +194,7 @@ backend/app/
   config.py            настройки (.env)
   database.py models.py schemas.py security.py deps.py
   routers/auth.py      регистрация / вход / refresh / me
-  routers/jobs.py      chunked upload, список, деталь, скачивание, WS-прогресс
+  routers/jobs.py      загрузка (одним запросом + chunked), список, деталь, скачивание, WS-прогресс
   services/
     diar_client.py     интеграция с DiarService
     processor.py       пайплайн: ffmpeg → DiarService → DeepSeek → PDF
